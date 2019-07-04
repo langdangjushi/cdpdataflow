@@ -1,22 +1,21 @@
 package io.infinivision.flink.connectors.hbase
 
-import org.apache.flink.connectors.hbase.table.{HBaseLookupFunction, HBaseTableSchemaV2}
-import org.apache.flink.streaming.api.datastream.DataStream
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
-import org.apache.flink.table.api.{RichTableSchema, TableSchema}
-import org.apache.flink.table.api.functions.{AsyncTableFunction, TableFunction}
-import org.apache.flink.table.api.types.{DataType, RowType, TypeConverters}
-import org.apache.flink.table.plan.stats.TableStats
-import org.apache.flink.table.sources.{BatchTableSource, LookupConfig, LookupableTableSource, StreamTableSource}
-import org.apache.flink.types.Row
 import java.lang.{Integer => JInteger}
 import java.util
 
-import io.infinivision.flink.connectors.utils.{CommonTableOptions, CommonTableOptionsValidator}
+import io.infinivision.flink.connectors.utils.{CacheConfig, CommonTableOptions, CommonTableOptionsValidator}
 import org.apache.flink.api.common.io.InputFormat
+import org.apache.flink.connectors.hbase.table.HBaseTableSchemaV2
 import org.apache.flink.core.io.InputSplit
+import org.apache.flink.streaming.api.datastream.DataStream
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
+import org.apache.flink.table.api.functions.{AsyncTableFunction, TableFunction}
+import org.apache.flink.table.api.types.{DataType, RowType, TypeConverters}
+import org.apache.flink.table.api.{RichTableSchema, TableSchema}
 import org.apache.flink.table.dataformat.BaseRow
 import org.apache.flink.table.descriptors.DescriptorProperties
+import org.apache.flink.table.plan.stats.TableStats
+import org.apache.flink.table.sources.{BatchTableSource, LookupConfig, LookupableTableSource, StreamTableSource}
 import org.apache.flink.table.util.{TableProperties, TableSchemaUtil}
 import org.apache.hadoop.conf.Configuration
 
@@ -86,6 +85,7 @@ class HBase121TableSource(
     val hbaseValidator = new HBase121Validator
     hbaseValidator.validateAuthLoginOption(properties)
 
+    val cacheConfig = CacheConfig.fromTableProperty(tableProperties)
     new HBaseAsyncLookupFunction(
       tableProperties,
       tableSchema,
@@ -93,7 +93,8 @@ class HBase121TableSource(
       hbaseTableSchema,
       rowKeyIndex,
       qualifierSourceIndexes,
-      hbaseConfiguration
+      hbaseConfiguration,
+      cacheConfig
     )
   }
 

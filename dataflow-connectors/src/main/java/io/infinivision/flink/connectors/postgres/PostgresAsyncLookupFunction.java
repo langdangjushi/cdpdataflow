@@ -1,5 +1,8 @@
 package io.infinivision.flink.connectors.postgres;
 
+import io.infinivision.flink.connectors.CacheableFunction;
+import io.infinivision.flink.connectors.cache.CacheBackend;
+import io.infinivision.flink.connectors.utils.CacheConfig;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.json.JsonArray;
@@ -25,7 +28,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
+public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> implements CacheableFunction<List<Object>, List<BaseRow>> {
     private static final Logger LOG = LoggerFactory.getLogger(PostgresAsyncLookupFunction.class);
 
     private final TableProperties tableProperties;
@@ -33,6 +36,8 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
     private final String queryTemplate;
     private Vertx vertx;
     private transient SQLClient SQLClient;
+    private final CacheConfig cacheConfig;
+    private transient CacheBackend<List<Object>, List<BaseRow>> cache;
 
     private final static int DEFAULT_VERTX_EVENT_LOOP_POOL_SIZE = 1;
 
@@ -47,10 +52,12 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
 
     public PostgresAsyncLookupFunction(TableProperties tableProperties,
                                        String queryTemplate,
-                                       RowType returnType) {
+                                       RowType returnType,
+                                       CacheConfig cacheConfig) {
         this.tableProperties = tableProperties;
         this.queryTemplate = queryTemplate;
         this.returnType = returnType;
+        this.cacheConfig = cacheConfig;
     }
 
     @Override
@@ -71,6 +78,9 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
         LOG.info("open PostgresAsyncLookupFunction");
         LOG.info("Vertx configuration - max_pool_size: {}. default query timeout: {}",
                 DEFAULT_MAX_DB_CONN_POOL_SIZE, DEFAULT_QUERY_TIMEOUT);
+        if (this.cacheConfig.hasCache()) {
+            this.cache = buildCache(context.getMetricGroup());
+        }
     }
 
 
@@ -78,11 +88,18 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
         JsonArray inputParams = new JsonArray();
         for (Object value : values) {
             if (value instanceof BinaryString) {
-                BinaryString input = (BinaryString)value;
+                BinaryString input = (BinaryString) value;
                 inputParams.add(input.toString());
             } else {
                 inputParams.add(value);
             }
+        }
+        List<Object> cacheKey = inputParams.getList();
+
+        if (this.cache != null && this.cache.exist(cacheKey)) {
+            resultFuture.complete(this.cache.get(cacheKey));
+            // cache hit
+            return;
         }
 
         SQLClient.getConnection(conn -> {
@@ -109,13 +126,15 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
                         for (int pos = 0; pos < reuseRow.getArity(); pos++) {
                             reuseRow.update(pos, line.getValue(pos));
                         }
-                        results.add(reuseRow);
+                        results.add(GenericRow.copyReference(reuseRow));
                     }
-                    resultFuture.complete(results);
                 } else {
-                    resultFuture.complete(Collections.emptyList());
+                    results = Collections.emptyList();
                 }
-
+                if (this.cache != null) {
+                    this.cache.put(cacheKey, results);
+                }
+                resultFuture.complete(results);
                 connection.close(done -> {
                     if (done.failed()) {
                         LOG.error("close connection failed: " + done.cause());
@@ -125,7 +144,10 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
 
             });
         });
-
+        // sleep some time for sqlclient to get data, just test
+//        try {
+//            Thread.sleep(100);
+//        } catch (InterruptedException ignored) { }
     }
 
     @Override
@@ -156,5 +178,15 @@ public class PostgresAsyncLookupFunction extends AsyncTableFunction<BaseRow> {
             });
         }
 
+    }
+
+    @Override
+    public CacheConfig getCacheConfig() {
+        return this.cacheConfig;
+    }
+
+    @Override
+    public List<BaseRow> loadValue(List<Object> key) {
+        return null;
     }
 }
